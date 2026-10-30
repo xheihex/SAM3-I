@@ -1,0 +1,42 @@
+[project]
+name = "sam3-i"
+version = "0.1.0"
+description = "Reproduction and evaluation environment for SAM3-I"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "sam3[train]",
+    "torch>=2.7.1,<2.8",
+    "torchvision>=0.22.1,<0.23",
+    # Keep the existing NumPy 1.x ABI for upstream and optional video code.
+    "numpy>=1.26.4,<2",
+    "opencv-python>=4.8,<4.12",
+    "matplotlib",
+    "pillow",
+    "psutil",
+    "pycocotools",
+]
+
+[dependency-groups]
+# uv sync includes dev by default, matching the original install script.
+dev = ["sam3[dev]"]
+notebooks = ["sam3[notebooks]"]
+video = ["sam3[video]"]
+
+[tool.uv]
+# The root manages the environment; the installable package lives in sam3/.
+package = false
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.workspace]
+members = ["sam3"]
+
+[tool.uv.sources]
+sam3 = { workspace = true }
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

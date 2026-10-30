@@ -22,28 +22,27 @@ PROJ_ROOT="$(cd "$(dirname "$0")" && pwd)"
 case "${MODE}" in
     install)
         echo ">>> Installing SAM3-I dependencies..."
-        cd "${PROJ_ROOT}/sam3"
-        pip install -e ".[dev,train]"
-        pip install pycocotools tqdm pillow einops
+        shift
+        uv sync --project "${PROJ_ROOT}" "$@"
         echo ">>> Installation complete!"
         ;;
 
     train)
         echo ">>> Starting training..."
         shift
-        bash "${PROJ_ROOT}/scripts/train.sh" "$@"
+        uv run --project "${PROJ_ROOT}" bash "${PROJ_ROOT}/scripts/train.sh" "$@"
         ;;
 
     eval)
         echo ">>> Starting inference + evaluation..."
         shift
-        bash "${PROJ_ROOT}/scripts/eval.sh" "$@"
+        uv run --project "${PROJ_ROOT}" bash "${PROJ_ROOT}/scripts/eval.sh" "$@"
         ;;
 
     inference)
         echo ">>> Starting inference..."
         shift
-        python "${PROJ_ROOT}/scripts/inference.py" "$@"
+        uv run --project "${PROJ_ROOT}" python "${PROJ_ROOT}/scripts/inference.py" "$@"
         ;;
 
     help|*)

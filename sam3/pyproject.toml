@@ -37,6 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+video = ["decord>=0.6.0"]
 dev = [
     "pytest",
     "pytest-cov",
@@ -83,8 +84,15 @@ train = [
 "Homepage" = "https://github.com/facebookresearch/sam3"
 "Bug Tracker" = "https://github.com/facebookresearch/sam3/issues"
 
+[tool.setuptools]
+# Register the source root directly for editable installs. A finder appended
+# after PathFinder would otherwise lose to the outer sam3/ namespace package.
+package-dir = {"" = "."}
+
 [tool.setuptools.packages.find]
 where = ["."]
+# assets/ contains model data, not a top-level Python package.
+include = ["sam3", "sam3.*"]
 
 [tool.setuptools.package-data]
 "sam3.train" = ["configs/**/*.yaml"]

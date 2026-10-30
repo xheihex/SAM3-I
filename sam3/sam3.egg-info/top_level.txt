@@ -1,3 +1,0 @@
-assets
-outputs
-sam3

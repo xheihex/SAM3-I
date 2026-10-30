@@ -29,11 +29,50 @@ SAM3-I/
 
 ## Installation
 
+Use Linux / WSL with `uv` and an NVIDIA driver compatible with CUDA 12.6.
+The root `pyproject.toml` manages Python 3.12, the local editable `sam3`
+workspace member, and the CUDA-enabled PyTorch index. Exact dependency
+versions are recorded in `uv.lock`.
+
 ```bash
-git clone https://github.com/debby-0527/SAM3-I.git
-cd SAM3-I
-bash run.sh install
+cd /home/kmg/SAM3-I
+uv sync --locked
+# Equivalent installation entry point:
+# bash run.sh install
 ```
+
+`uv sync` creates or updates `.venv` and installs the inference, evaluation,
+training, and development dependencies. No manual environment activation is
+needed when using `uv run`:
+
+```bash
+uv run python scripts/inference.py --help
+uv run python scripts/evaluate.py --help
+
+# Add/remove dependencies through uv; commit pyproject.toml and uv.lock together.
+uv add <package>
+uv remove <package>
+
+# Optional notebook dependencies:
+uv sync --locked --group notebooks
+```
+
+The default environment covers image training and evaluation. Video decoding
+is optional (`uv sync --locked --group video`) and is also included in the
+notebook group. The upstream Decord 0.6.0 Linux wheel has
+[incorrect platform metadata](https://github.com/dmlc/decord/issues/356), which
+can cause repeated reinstalls and a `uv pip check` warning in those optional
+environments.
+
+Run these commands from the repository root. `bash run.sh train`, `eval`, and
+`inference` also use the uv-managed environment. For a smaller environment,
+use `uv sync --locked --no-dev` and run commands with `uv run --no-dev`.
+To update locked versions within the declared compatibility ranges, use
+`uv lock --upgrade` followed by `uv sync --locked`.
+
+Keep datasets, checkpoints, experiment logs, and evaluation outputs under
+`/mnt/d/heihe/Documents/ChatGPT/sam3i试验区`; pass their paths explicitly to
+the training or evaluation commands.
 
 ---
 
