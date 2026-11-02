@@ -26,3 +26,10 @@
 - 已验证的环境：Python 3.12、PyTorch 2.7.1+cu126、torchvision 0.22.1+cu126、NumPy 1.26.4；PyTorch 显式使用 CUDA 12.6 官方索引，具体版本由锁文件记录。
 - `run.sh` 已接入 uv；已修复从仓库根目录导入 `sam3` 的打包问题。默认安装图像推理、评估、训练及开发依赖；Decord 改为视频分支按需导入，可选视频/笔记本组仍有上游 wheel 标签错误，详见 README。
 - 已通过依赖兼容检查、CUDA 运算及 torchvision GPU NMS、图像数据加载和推理/评估/训练脚本帮助入口验证。尚未在本次任务中下载模型权重、运行完整模型或验证论文评估指标。
+- 用户指定的 SAM3-I 权重文件为 `/home/kmg/models/sam3-i/checkpoint.pt`；后续推理和评估默认使用此路径。
+
+## 项目记忆（2026-11-03）
+
+- 已新增 Colab 单图推理 notebook、独立推理适配脚本、checkpoint 审查、CPU 验证及源码打包脚本，部署说明见 `docs/colab_single_image.md`；未修改原作者模型源码。
+- 本地 WSL 已通过 11 项 CPU 检查和真实 checkpoint 的 meta 名称/形状审查，验证过程中 CUDA 未初始化。
+- 用户于 2026-11-03 确认 Colab 单图推理部署成功。具体 GPU 型号、运行精度、耗时和推理日志尚未记录；成功推理不代表已复现论文评估指标。
