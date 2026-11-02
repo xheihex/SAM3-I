@@ -13,6 +13,8 @@ EXTRA_SOURCE = [
     "scripts/colab_single_image.py", "scripts/audit_single_image_checkpoint.py",
     "scripts/validate_colab_single_image.py", "scripts/build_colab_bundle.py",
     "notebooks/SAM3I_single_image_colab.ipynb", "docs/colab_single_image.md",
+    "scripts/colab_notebook_helpers.py", "scripts/single_image_visualization.py",
+    "scripts/sync_colab_notebook.py", "scripts/validate_colab_github.py",
 ]
 
 

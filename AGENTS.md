@@ -32,4 +32,7 @@
 
 - 已新增 Colab 单图推理 notebook、独立推理适配脚本、checkpoint 审查、CPU 验证及源码打包脚本，部署说明见 `docs/colab_single_image.md`；未修改原作者模型源码。
 - 本地 WSL 已通过 11 项 CPU 检查和真实 checkpoint 的 meta 名称/形状审查，验证过程中 CUDA 未初始化。
-- 用户于 2026-11-03 确认 Colab 单图推理部署成功。具体 GPU 型号、运行精度、耗时和推理日志尚未记录；成功推理不代表已复现论文评估指标。
+- 已检查用户 2026-11-03 提供的 Colab 运行记录：metadata 为 A100，simple / BF16 / 阈值 0.6，输出 1 个实例，PyTorch 峰值已分配显存约 7.6356 GiB；最后保存单元格未执行，实例分数、耗时和完整子进程日志未持久保留。成功推理不代表已复现论文评估指标。
+- notebook 已改为从 GitHub 自动获取代码，默认 `https://github.com/xheihex/SAM3-I.git` 的 main，记录实际提交号；权重仍由 Drive 的 `/content/drive/MyDrive/models/sam3-i/checkpoint.pt` 复制到 Colab 本地磁盘加载。
+- notebook 内嵌部署及展示辅助函数，兼容远端已有的单图推理脚本；图上显示掩码、框和从 1 开始的编号，图下显示对应置信度，成功运行同单元格自动保存结果和日志到 Drive。
+- 新增 6 项 GitHub/展示/自动保存 CPU 检查及原有 11 项检查均通过，实际下载 GitHub main 并重建锁定环境、检查推理 CLI 成功；新版尚未在 Colab 重新运行 GPU 前向。修改辅助模块后需运行 `scripts/sync_colab_notebook.py` 同步内嵌代码。
