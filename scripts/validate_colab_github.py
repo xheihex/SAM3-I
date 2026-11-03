@@ -5,6 +5,7 @@ import argparse
 import ast
 from contextlib import redirect_stdout
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -67,6 +68,14 @@ class GithubNotebookTests(unittest.TestCase):
                 self.assertEqual(source, embedded_source(name))
                 embedded.append(name)
         self.assertEqual(set(embedded), {"scripts/colab_notebook_helpers.py", "scripts/single_image_visualization.py"})
+        namespace = {}
+        exec(embedded_source("scripts/colab_notebook_helpers.py"), namespace)
+        worker_source = namespace["COLAB_WORKER_SOURCE"]
+        ast.parse(worker_source, filename="embedded-model-worker")
+        worker_name = "scripts/colab_inference_worker.py"
+        self.assertEqual(worker_source, (ROOT / worker_name).read_text())
+        self.assertEqual(namespace["EMBEDDED_SOURCE_SHA256"][worker_name],
+                         hashlib.sha256(worker_source.encode("utf-8")).hexdigest())
 
     def test_subprocess_logs_stdout_stderr_and_failure(self):
         log = self.folder / "stdout-stderr.log"
@@ -136,13 +145,28 @@ class GithubNotebookTests(unittest.TestCase):
         environment.write_text(json.dumps({"gpu": "synthetic-no-GPU"}))
         audit = self.folder / "audit.json"
         audit.write_text('{"ok":true,"synthetic":true}')
-        def fake_inference(command, log_path, **kwargs):
-            # Exercise the exact notebook cell while replacing only GPU computation.
-            self.assertIn("--checkpoint", command)
-            self.assertIn("--category", command)
-            destination = Path(command[command.index("--output-dir") + 1])
-            old_format_results(destination)
-            Path(log_path).write_text("SYNTHETIC MODEL OUTPUT - no GPU used\n")
+        class FakeResidentWorker:
+            info = {"gpu": "synthetic-no-GPU", "worker_id": "synthetic-resident",
+                    "worker_pid": 123, "model_load_seconds": 2.5}
+            queries = 0
+            def is_alive(self):
+                return True
+            def predict(self, request, *, log_path):
+                # Execute the exact notebook cell; replace only model computation.
+                self.queries += 1
+                destination = Path(request["output_dir"])
+                old_format_results(destination)
+                result_path = destination / "result.json"
+                result = json.loads(result_path.read_text())
+                result.update(
+                    **self.info, query_index=self.queries, inference_seconds=1.25,
+                    prompt=request["prompt"], category=request["category"],
+                    threshold=request["threshold"],
+                )
+                result_path.write_text(json.dumps(result))
+                Path(log_path).write_text("SYNTHETIC MODEL OUTPUT - no GPU used\n")
+                return result
+        fake_worker = FakeResidentWorker()
         real_path = Path
         def mapped_path(path):
             if str(path) == "/content/sam3i-results":
@@ -154,24 +178,34 @@ class GithubNotebookTests(unittest.TestCase):
             LOGS=logs, CHECKPOINT=self.folder / "checkpoint.pt", IMAGE_PATH=image_path,
             SOURCE_INFO={"git_commit": "synthetic"}, ENVIRONMENT_PATH=environment,
             AUDIT_PATH=audit, DRIVE_RESULTS=self.folder / "Drive-results",
-            run_logged=fake_inference, display=lambda picture: displayed.append(picture.copy()),
+            MODEL_WORKER=fake_worker, display=lambda picture: displayed.append(picture.copy()),
+
         )
         cell = next(cell for cell in notebook["cells"]
                     if cell["cell_type"] == "code" and "PROMPT = " in "".join(cell["source"]))
-        with redirect_stdout(io.StringIO()):
-            exec(compile("".join(cell["source"]), "<actual-inference-cell>", "exec"), namespace)
-        self.assertEqual(len(displayed), 1)
-        saved = namespace["SAVED_RESULT"]
-        self.assertTrue(saved.is_file(), "Drive archive must exist before optional download cell")
-        with zipfile.ZipFile(saved) as archive:
-            for required in ("result_figure.png", "overlay.png", "result.json",
-                             "source-manifest.json", "environment.json", "checkpoint-audit.json"):
-                self.assertIn(required, archive.namelist())
-            self.assertTrue(any(name.startswith("logs/inference-") for name in archive.namelist()))
-            result = json.loads(archive.read("result.json"))
-        self.assertEqual([p["instance_id"] for p in result["predictions"]], [1, 2])
-        # Leave one explicitly synthetic inspection artifact, with scores shown below.
+        archives, results = [], []
+        for query_index in (1, 2):
+            with redirect_stdout(io.StringIO()):
+                exec(compile("".join(cell["source"]), "<actual-inference-cell>", "exec"), namespace)
+            saved = namespace["SAVED_RESULT"]
+            self.assertTrue(saved.is_file(), "Archive must exist before optional download cell")
+            archives.append(saved)
+            with zipfile.ZipFile(saved) as archive:
+                for required in ("result_figure.png", "overlay.png", "result.json",
+                                 "source-manifest.json", "environment.json", "checkpoint-audit.json"):
+                    self.assertIn(required, archive.namelist())
+                self.assertTrue(any(name.startswith("logs/inference-") for name in archive.namelist()))
+                result = json.loads(archive.read("result.json"))
+                results.append(result)
+            self.assertEqual([p["instance_id"] for p in result["predictions"]], [1, 2])
+            self.assertEqual(result["query_index"], query_index)
+        self.assertEqual(len(displayed), 2)
+        self.assertEqual(fake_worker.queries, 2)
+        self.assertNotEqual(archives[0], archives[1])
+        self.assertEqual(results[0]["worker_id"], results[1]["worker_id"])
+        # Leave one explicitly synthetic artifact; it is not a segmentation prediction.
         displayed[0].save(self.materials / "notebook-cell-synthetic-figure.png")
+
 
 
 def github_smoke(materials):
@@ -220,7 +254,7 @@ def main():
         "failures": len(result.failures), "errors": len(result.errors),
         "cuda_initialized_before": False, "cuda_initialized_after": torch.cuda.is_initialized(),
         "gpu_model_loaded": False,
-        "notebook_inference_cell": "Executed with real exporter and synthetic model outputs.",
+        "notebook_inference_cell": "Executed twice with one synthetic resident worker and real exporter.",
         "github_smoke": smoke,
     }
     (args.output_dir / "github-notebook-check.json").write_text(json.dumps(report, indent=2))

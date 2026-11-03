@@ -15,6 +15,7 @@ EXTRA_SOURCE = [
     "notebooks/SAM3I_single_image_colab.ipynb", "docs/colab_single_image.md",
     "scripts/colab_notebook_helpers.py", "scripts/single_image_visualization.py",
     "scripts/sync_colab_notebook.py", "scripts/validate_colab_github.py",
+    "scripts/colab_inference_worker.py", "scripts/validate_colab_resident.py",
 ]
 
 

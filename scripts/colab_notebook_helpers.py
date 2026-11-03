@@ -152,3 +152,159 @@ def archive_run(output_dir, source, audit_path, logs_dir, environment_path, driv
     shutil.copy2(archive, saved_archive)
     print(f"Saved to Drive: {saved_archive}", flush=True)
     return archive, saved_archive
+
+
+class ResidentInferenceWorker:
+    """Control a direct Python child with file replies and unparsed stdout logs."""
+
+    def __init__(self, command, ipc_dir, log_path, *, env=None, cwd=None, startup_timeout=600):
+        import atexit
+        self.ipc_dir = Path(ipc_dir)
+        self.ipc_dir.mkdir(parents=True, exist_ok=False)
+        self.log_path = Path(log_path)
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_offset = 0
+        self._busy = False
+        self._log_writer = self.log_path.open("w", encoding="utf-8")
+        child_env = dict(os.environ if env is None else env, PYTHONUNBUFFERED="1")
+        try:
+            self.process = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=self._log_writer,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                env=child_env, cwd=cwd,
+            )
+        except BaseException:
+            self._log_writer.close()
+            raise
+        try:
+            ready = self._wait("ready", startup_timeout)
+            if not ready["ok"]:
+                raise RuntimeError(ready.get("error", "Worker startup failed."))
+            self.info = ready["result"]
+        except BaseException:
+            self.stop()
+            raise
+        atexit.register(self.stop)
+
+    def is_alive(self):
+        return self.process.poll() is None
+
+    def _show_new_logs(self):
+        with self.log_path.open(encoding="utf-8", errors="replace") as stream:
+            stream.seek(self._log_offset)
+            chunk = stream.read()
+            self._log_offset = stream.tell()
+        if chunk:
+            print(chunk, end="", flush=True)
+
+    def _wait(self, name, timeout):
+        import time
+        deadline = time.monotonic() + timeout
+        reply_path = self.ipc_dir / (name + ".json")
+        while True:
+            self._show_new_logs()
+            # Prefer the final reply even when a fatal error just stopped the host.
+            if reply_path.is_file():
+                reply = json.loads(reply_path.read_text(encoding="utf-8"))
+                reply_path.unlink()
+                return reply
+            if not self.is_alive():
+                self._show_new_logs()
+                raise RuntimeError(
+                    f"Model worker exited ({self.process.returncode}); "
+                    f"see {self.log_path}. Run the model loading cell again."
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Model worker timed out; see {self.log_path}.")
+            time.sleep(0.1)
+
+    def predict(self, request, *, log_path=None, timeout=600):
+        import uuid
+        if not self.is_alive():
+            raise RuntimeError("Model worker is stopped. Run the model loading cell again.")
+        if self._busy:
+            raise RuntimeError("A query is already running in this model worker.")
+        self._busy = True
+        offset = self.log_path.stat().st_size
+        try:
+            request_id = uuid.uuid4().hex
+            self.process.stdin.write(json.dumps({**request, "id": request_id}, ensure_ascii=False) + "\n")
+            self.process.stdin.flush()
+            reply = self._wait(request_id, timeout)
+            if not reply["ok"]:
+                if reply.get("fatal"):
+                    self.stop()
+                raise RuntimeError(
+                    f"{reply.get('error_type', 'Error')}: {reply['error']}. "
+                    f"Worker log: {self.log_path}"
+                )
+            return reply["result"]
+        except (KeyboardInterrupt, TimeoutError, BrokenPipeError):
+            # Do not leave an unknown request running, or silently queue a retry.
+            self.stop()
+            raise
+        finally:
+            self._busy = False
+            if log_path is not None:
+                destination = Path(log_path)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with self.log_path.open("rb") as stream:
+                    stream.seek(offset)
+                    destination.write_bytes(stream.read())
+
+    def stop(self):
+        """Stop/reap the actual GPU Python process, releasing its CUDA context."""
+        if self.is_alive():
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
+        else:
+            self.process.wait()
+        if self.process.stdin and not self.process.stdin.closed:
+            self.process.stdin.close()
+        if not self._log_writer.closed:
+            self._log_writer.close()
+
+
+def start_model_worker(repo, checkpoint, runtime_dir, logs_dir, *,
+                       env=None, worker_source=None, existing=None):
+    """Reuse an identical live model, or stop it before loading a replacement."""
+    import uuid
+    repo, checkpoint = Path(repo).resolve(), Path(checkpoint).resolve()
+    bpe = repo / "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
+    if worker_source is None:
+        worker_source = Path(__file__).with_name("colab_inference_worker.py").read_text(encoding="utf-8")
+    def identity(path):
+        stat = path.stat()
+        return [str(path), stat.st_size, stat.st_mtime_ns]
+    config = {
+        "repo": str(repo), "checkpoint": identity(checkpoint), "bpe": identity(bpe),
+        "worker_sha256": hashlib.sha256(worker_source.encode("utf-8")).hexdigest(),
+        "adapter_sha256": hashlib.sha256((repo / "scripts/colab_single_image.py").read_bytes()).hexdigest(),
+    }
+    if existing is not None:
+        if existing.is_alive() and getattr(existing, "model_config", None) == config:
+            print(f"Reusing resident model: {existing.info['worker_id']}", flush=True)
+            return existing
+        existing.stop()
+    runtime_dir, logs_dir = Path(runtime_dir), Path(logs_dir)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    host_id = uuid.uuid4().hex[:12]
+    worker_script = runtime_dir / f"worker-{host_id}.py"
+    worker_script.write_text(worker_source, encoding="utf-8")
+    ipc_dir = runtime_dir / f"ipc-{host_id}"
+    # uv already synchronized this environment. Launch Python directly so stop()
+    # always owns the CUDA process rather than a uv wrapper.
+    python = repo / ".venv/bin/python"
+    if not python.is_file():
+        raise FileNotFoundError("Run the uv environment preparation cell first.")
+    worker = ResidentInferenceWorker(
+        [str(python), str(worker_script), "--repo-root", str(repo),
+         "--checkpoint", str(checkpoint), "--bpe", str(bpe), "--ipc-dir", str(ipc_dir)],
+        ipc_dir, logs_dir / f"model-worker-{host_id}.log", env=env, cwd=repo,
+    )
+    worker.model_config = config
+    return worker
